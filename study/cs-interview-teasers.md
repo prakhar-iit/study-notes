@@ -907,15 +907,25 @@ Interviewers phrase these as features. The real work is listing the operations t
 | You need | Pick | Typical cost |
 | --- | --- | --- |
 | Lookup or insert by key | Hash map | O(1) average |
+| Grouping items that are equivalent | Hash map on a canonical key | O(n) |
+| Counts of earlier states (subarray sums) | Prefix sums + hash map | O(n) |
 | Sorted keys, floor/ceiling, ranges | Balanced BST, skip list or sorted map | O(log n) |
 | The current min or max, repeatedly | Heap (priority queue) | O(log n) push/pop, O(1) peek |
+| Top k of n, or merging k sorted streams | Heap of size k | O(n log k) |
 | Recency order with O(1) moves | Hash map + doubly linked list | O(1) |
-| Prefix lookups | Trie | O(prefix length) |
+| Undo/redo, min stack, queue from stacks | Stacks | O(1) amortized |
 | Window max/min, next greater element | Monotonic deque or stack | O(1) amortized |
+| Prefix lookups, path keys, bit prefixes | Trie (radix or binary trie) | O(key length) |
+| Many patterns in one pass | Aho–Corasick (trie + failure links) | O(text + matches) |
+| Substring queries on a fixed text | Suffix array or suffix tree | O(pattern × log n) |
 | Groups that only ever merge | Union-find | Near O(1) amortized |
 | Range sums with updates | Fenwick tree or segment tree | O(log n) |
+| Maximum overlap of intervals | Sweep line over sorted events | O(n log n) |
 | Dependencies and ordering | DAG + topological sort | O(V + E) |
+| Shortest path (weighted, unweighted) | Dijkstra with a heap, BFS | O((V + E) log V), O(V + E) |
+| Fixed-capacity queue between threads | Ring buffer | O(1) |
 | Counts over a sliding time window | Circular buffer of time buckets | O(1) |
+| Membership over dense integer IDs | Bitmap | O(1) per bit, fast AND/OR |
 | Nearby points on a map | Geohash/S2 grid or quadtree | About O(1) per update |
 | Approximate membership or counts | Bloom filter, Count-Min, HyperLogLog (section 1) | O(k) |
 
@@ -1186,6 +1196,400 @@ Scanning every driver is too slow. Divide the map into cells, so a search only l
 <details><summary>Answer</summary>
 
 A grid-based spatial index: geohash, or cell systems such as Uber's H3 hexagons or Google's S2. Map each driver to a cell ID and keep a hash map from cell to the drivers in it. A query checks the rider's cell and its neighbours, computes exact distances, and keeps the 10 nearest with a size-10 heap. Moving a driver between cells is O(1), which matters at about 250,000 location updates per second. A quadtree adapts better to uneven density but costs more to rebalance under constant updates. Redis offers this as `GEOADD` and `GEOSEARCH`, built on geohash and a sorted set.
+
+</details>
+
+### 7.17 Build a hash map
+
+**Problem:** Implement a hash map from scratch with put, get and remove in average O(1) time, without using your language's built-in map. Explain how you handle collisions, when and how the table grows, and what makes performance degrade.
+
+<details><summary>Hint</summary>
+
+An array gives O(1) access by index. You need a way to turn a key into an index, and a plan for when two keys land on the same index.
+
+</details>
+
+<details><summary>Answer</summary>
+
+An array of buckets indexed by hash(key) mod capacity. Resolve collisions either by chaining (each bucket holds a small list) or by open addressing (probe to the next free slot). Track the load factor (entries ÷ buckets) and, past a threshold, allocate an array twice as large and rehash every entry: O(n) once, but O(1) amortized per insert. Java's `HashMap` resizes at a load factor of 0.75 and turns long chains into balanced trees; Python's `dict` uses open addressing and resizes at about 2/3 full.
+
+**Follow-up:** "What makes it slow?" A poor hash function, or adversarial keys that all collide, turn lookups into O(n) scans. Languages defend against this with randomized hash seeds.
+
+</details>
+
+### 7.18 Min stack, and a queue from two stacks
+
+**Problem:** (a) Design a stack that supports push, pop, top and getMin, all in O(1). (b) Implement a FIFO queue using only two stacks, so that enqueue and dequeue are O(1) amortized.
+
+<details><summary>Hint</summary>
+
+(a) The minimum only changes when you push or pop, so remember it at each level. (b) Pouring one stack into another reverses its order.
+
+</details>
+
+<details><summary>Answer</summary>
+
+(a) Keep a second stack holding the minimum at each depth; push min(x, current min) alongside each element and pop both together. (b) Push incoming items onto an "in" stack. To dequeue, pop from an "out" stack; when it's empty, move everything from "in" to "out" first. Each item moves at most once, so the cost is O(1) amortized.
+
+</details>
+
+### 7.19 Undo, redo and the editor buffer
+
+**Problem:** You're building a text editor. Users type and delete at the cursor anywhere in a document of up to 10 MB, and they expect unlimited undo and redo. Which structures hold the operation history and the text itself?
+
+<details><summary>Hint</summary>
+
+Undo and redo are last-in, first-out. And inserting into the middle of a plain string copies everything after the cursor.
+
+</details>
+
+<details><summary>Answer</summary>
+
+History: two stacks of operations. Each edit pushes onto the undo stack and clears the redo stack; undo pops an operation, applies its inverse and pushes it onto redo. Text: a plain string makes each keystroke O(n). Use a gap buffer (an array with an empty gap at the cursor, as in Emacs), a rope (a balanced tree of string chunks), or a piece table (the original file plus an append-only buffer of additions, indexed by a list of pieces), which VS Code uses.
+
+</details>
+
+### 7.20 The k largest, or k closest
+
+**Problem:** From 100 million points, return the 1,000 closest to the origin. Then: the points arrive as an endless stream and you must always know the current 1,000 closest. Compare the approaches by time and memory.
+
+<details><summary>Hint</summary>
+
+Sorting does more work than needed. For the stream, you only need a quick way to compare each new point against the worst of your current best 1,000.
+
+</details>
+
+<details><summary>Answer</summary>
+
+A max-heap of size k keyed by distance: each new point replaces the root if it's closer. That's O(n log k) time and O(k) memory, and it works for streams. For a static array, quickselect partitions around the k-th distance in O(n) average time (O(n²) worst case, avoided with random pivots), but it needs the whole array in memory and modifies it.
+
+</details>
+
+### 7.21 Merge logs from 1,000 servers
+
+**Problem:** Each of 1,000 servers produces a log file already sorted by timestamp. Produce one combined log sorted by timestamp, reading each file sequentially and using memory proportional to the number of files, not their size.
+
+<details><summary>Hint</summary>
+
+The next line of the output is always the smallest of the 1,000 current file heads.
+
+</details>
+
+<details><summary>Answer</summary>
+
+A k-way merge with a min-heap of size k, holding the current head line of each file keyed by timestamp. Pop the smallest, write it, and push the next line from the same file. With N total lines it runs in O(N log k). This is the merge step of external sort (teaser 1.4) and how LSM-tree databases compact sorted files.
+
+</details>
+
+### 7.22 Counters with O(1) max and min
+
+**Problem:** Design a structure that supports inc(key) and dec(key), which change a key's count by one (a key whose count reaches 0 is removed), plus getMaxKey() and getMinKey(), which return any key with the highest or lowest count. All four operations must be O(1).
+
+<details><summary>Hint</summary>
+
+Counts only ever change by one. Group keys by their count, and keep the groups in count order.
+
+</details>
+
+<details><summary>Answer</summary>
+
+A doubly linked list of buckets in increasing count order, where each bucket holds the set of keys with that count, plus a hash map from key to its bucket. inc moves the key to the next bucket, creating it right after the current one if needed, and deletes the old bucket if it's now empty; dec mirrors this. The head bucket holds the min keys and the tail the max keys.
+
+</details>
+
+### 7.23 Group anagrams
+
+**Problem:** Given 10 million words, group together the words that are anagrams of each other ("listen", "silent", "enlist"). Words average 8 letters. What do you use as the grouping key?
+
+<details><summary>Hint</summary>
+
+Two words are anagrams if they're identical after some transformation that ignores letter order.
+
+</details>
+
+<details><summary>Answer</summary>
+
+A hash map from a canonical key to a list of words. The key is the word with its letters sorted (O(L log L) per word), or a tuple of 26 letter counts (O(L)). Total time is O(n × L). The same canonical-key trick groups any items equivalent under some normalization.
+
+</details>
+
+### 7.24 Subarrays that sum to k
+
+**Problem:** Given an array of integers, which may be negative, count the contiguous subarrays whose sum is exactly k. n can be 10⁶, so O(n²) is too slow.
+
+<details><summary>Hint</summary>
+
+The sum of a subarray is the difference of two prefix sums. For each prefix sum, how many earlier prefix sums would complete it?
+
+</details>
+
+<details><summary>Answer</summary>
+
+Keep a running prefix sum and a hash map from each prefix-sum value to how many times it has occurred, starting with {0: 1}. At each position, add count[prefix − k] to the answer, then record the current prefix. That's O(n). A two-pointer sliding window fails here because negative numbers break its monotonic growth.
+
+</details>
+
+### 7.25 Longest run without repeats
+
+**Problem:** Given a string of length up to 10⁶, find the length of the longest substring with no repeated characters ("abcabcbb" gives 3, for "abc"). Aim for O(n).
+
+<details><summary>Hint</summary>
+
+Grow a window to the right. When a repeat enters, where must the left edge jump to?
+
+</details>
+
+<details><summary>Answer</summary>
+
+A sliding window plus a hash map from each character to the index where it last appeared. For each character, if its last index is inside the window, move the left edge just past it; then update the map and the best length. Each character is processed once, so it's O(n). The same pattern finds the longest window with at most k distinct values.
+
+</details>
+
+### 7.26 Peak concurrent sessions
+
+**Problem:** You have 50 million session records from yesterday, each with a login time and a logout time. Find the maximum number of sessions active at the same moment, and when it happened.
+
+<details><summary>Hint</summary>
+
+Turn each session into two events, one that adds 1 and one that subtracts 1.
+
+</details>
+
+<details><summary>Answer</summary>
+
+A sweep line. Create (time, +1) for each login and (time, −1) for each logout, sort by time, and walk through keeping a running count; the maximum is the answer. Break ties by processing logouts before logins if a session ending at t doesn't overlap one starting at t. That's O(n log n). If times are whole seconds within one day, a difference array of 86,400 slots avoids the sort and runs in O(n).
+
+</details>
+
+### 7.27 Cheapest route
+
+**Problem:** A delivery map has 1 million intersections and 3 million roads, each with a travel time. Find the fastest route between two intersections. Follow-ups: some edges have negative weights (a road pays a rebate), and in another map every road costs either 0 or 1.
+
+<details><summary>Hint</summary>
+
+Always expand the closest not-yet-finalized intersection next. Which structure hands you that quickly?
+
+</details>
+
+<details><summary>Answer</summary>
+
+Dijkstra's algorithm with a min-heap of (distance, node) over an adjacency list: O((V + E) log V). Skip stale heap entries instead of decreasing keys. A* adds a distance-to-goal estimate (straight-line distance) to explore fewer nodes.
+
+**Follow-up:** Negative weights break Dijkstra; use Bellman–Ford in O(V × E), which also detects negative cycles. With weights of only 0 or 1, a deque replaces the heap (0–1 BFS): push 0-cost neighbours to the front and 1-cost ones to the back, for O(V + E).
+
+</details>
+
+### 7.28 Word ladder
+
+**Problem:** Given a start word, an end word and a dictionary of 100,000 five-letter words, find the fewest steps to transform start into end, changing one letter per step, where every intermediate word must be in the dictionary ("cold → cord → card → ward → warm").
+
+<details><summary>Hint</summary>
+
+Words are nodes and one-letter changes are edges; you want the shortest path. How do you find a word's neighbours without comparing it against every other word?
+
+</details>
+
+<details><summary>Answer</summary>
+
+BFS, since every step costs the same. Precompute a hash map from wildcard patterns to words ("c*ld" → [cold, cord…]): each word has 5 patterns, so finding neighbours is a few lookups instead of 100,000 comparisons. Bidirectional BFS from both ends cuts the explored nodes dramatically.
+
+</details>
+
+### 7.29 In-memory file system
+
+**Problem:** Design an in-memory file system supporting mkdir(path), writeFile(path, content), readFile(path) and ls(path), which lists a directory's entries in sorted order. Paths look like "/a/b/c.txt". Each operation should cost time proportional to the path depth, not the total number of files.
+
+<details><summary>Hint</summary>
+
+A path is a sequence of names, and directories nest. Which tree shares common prefixes?
+
+</details>
+
+<details><summary>Answer</summary>
+
+A trie keyed by path components: each node has a name, a map from child name to node, and file content if it's a file. Every operation splits the path and walks it, in O(depth). ls on a directory returns its children's names, kept sorted by using a sorted map per node or by sorting on demand; ls on a file returns just its name.
+
+</details>
+
+### 7.30 Longest-prefix match for IP routing
+
+**Problem:** A router has 1 million routes like 10.1.0.0/16 → port 3 and 10.1.2.0/24 → port 7. For each incoming packet's destination IP, it must find the most specific matching route (the longest prefix), millions of times per second.
+
+<details><summary>Hint</summary>
+
+An IPv4 address is 32 bits, and a route is just a bit prefix of some length.
+
+</details>
+
+<details><summary>Answer</summary>
+
+A binary trie over address bits: each route is stored at the node reached by its prefix bits. A lookup walks the destination's bits from the top, remembering the last route seen, which is at most 32 steps. Production routers compress it (Patricia or multibit tries that consume several bits per step) or use TCAM hardware, which matches all prefixes in parallel.
+
+</details>
+
+### 7.31 Bounded producer–consumer queue
+
+**Problem:** Several producer threads emit events, and consumer threads process them. Build an in-memory queue with a fixed capacity of 1 million events that never allocates after start-up: producers block (or are rejected) when it's full, and consumers block when it's empty.
+
+<details><summary>Hint</summary>
+
+A fixed-size array can act as a queue if the head and tail indices wrap around.
+
+</details>
+
+<details><summary>Answer</summary>
+
+A ring buffer: an array plus head and tail indices taken modulo the capacity (a power of two lets you use a bit mask instead of modulo). Guard it with a mutex and two condition variables ("not full" and "not empty") so threads block instead of spinning. With exactly one producer and one consumer, a lock-free version needs only atomic head and tail counters; the LMAX Disruptor is built on this idea.
+
+</details>
+
+### 7.32 Daily active user cohorts
+
+**Problem:** An app has 100 million users with integer IDs. Store which users were active on each day so you can quickly answer: how many were active today? How many were active on all of the last 7 days? How many were active last week but not this week?
+
+<details><summary>Hint</summary>
+
+Each user is either active or not on a given day: one bit.
+
+</details>
+
+<details><summary>Answer</summary>
+
+One bitmap per day, with bit i set if user i was active. A day costs 100 million bits, 12.5 MB. Counts are a popcount, and cohorts are bitwise AND, OR and AND NOT across days, all fast word-at-a-time operations. Redis supports this directly (`SETBIT`, `BITCOUNT`, `BITOP`). For sparse days, Roaring bitmaps compress by switching chunk encodings between arrays and bitmaps; Lucene, Druid and Spark use them.
+
+</details>
+
+### 7.33 Trie: implement one
+
+**Problem:** Implement a trie for lowercase words with insert(word), search(word), which is true only for whole words, and startsWith(prefix). Then: how would you delete a word, and how does your choice of child storage affect memory for 1 million English words?
+
+<details><summary>Hint</summary>
+
+Each node represents a prefix. What must a node store so that "app" and "apple" can both be words?
+
+</details>
+
+<details><summary>Answer</summary>
+
+Each node holds its children and an end-of-word flag. insert walks the word's characters, creating missing nodes, and sets the flag on the last node. search walks the word and checks the flag; startsWith only checks that the walk succeeds. All are O(word length). Delete clears the flag, then removes nodes bottom-up while they have no children and no flag.
+
+**Follow-up:** Children stored as a 26-slot array give the fastest lookup but waste memory on sparse nodes (26 pointers per node, most empty). A hash map per node fits large or sparse alphabets such as Unicode. A radix tree, which merges single-child chains into one edge labelled with a string, typically cuts the node count several-fold.
+
+</details>
+
+### 7.34 Trie: find all dictionary words in a letter grid
+
+**Problem:** Given a 50 × 50 grid of letters and a dictionary of 100,000 words, find every dictionary word that can be spelled by moving between horizontally or vertically adjacent cells, without reusing a cell within one word (the game Boggle).
+
+<details><summary>Hint</summary>
+
+Searching for each word separately repeats the same grid walks. Walk the grid once and stop the moment the letters so far stop being the prefix of any word.
+
+</details>
+
+<details><summary>Answer</summary>
+
+Build a trie of the dictionary, then run a DFS from every cell while walking the trie in step: move to a neighbour only if the trie has a child for its letter. Record a word whenever you reach a node with the end flag, and mark visited cells during the path. The prefix check prunes almost every dead path early.
+
+**Follow-up:** Once a word is found, clear its end flag, and remove trie leaves that no longer lead to any word, so later searches skip them.
+
+</details>
+
+### 7.35 Trie: search with wildcards
+
+**Problem:** Design a dictionary with addWord(word) and search(pattern), where the pattern may contain ".", which matches any single letter ("b.d" matches "bad" and "bed"). Expect 1 million words and frequent searches.
+
+<details><summary>Hint</summary>
+
+Without a wildcard, a search is a single walk down the trie. What should a walk do when it reaches a "."?
+
+</details>
+
+<details><summary>Answer</summary>
+
+A trie, searched with DFS: a normal letter follows one child, and a "." tries every child at that level. Searches without wildcards stay O(length); each "." multiplies the branches, up to 26 per wildcard.
+
+**Follow-up:** If wildcards are common, also bucket words by length, since a pattern only matches words of its own length, or index each word by its wildcard patterns, as in teaser 7.28.
+
+</details>
+
+### 7.36 Trie: maximum XOR of two numbers
+
+**Problem:** Given 1 million non-negative 32-bit integers, find the maximum value of a XOR b over all pairs. Comparing every pair is about 5 × 10¹¹ operations; aim for close to linear time.
+
+<details><summary>Hint</summary>
+
+XOR is maximized by making the highest bits differ. For each number, greedily look for a partner whose bits are opposite from the top bit down.
+
+</details>
+
+<details><summary>Answer</summary>
+
+A binary trie of all the numbers, from bit 31 down to bit 0. For each number, walk the trie preferring the child with the opposite bit at each level, and fall back to the same bit when the opposite is missing; the path taken builds the best XOR for that number. Each insert and query is 32 steps, so it's O(32n).
+
+</details>
+
+### 7.37 Trie: segment text into dictionary words
+
+**Problem:** Given a string with no spaces of length up to 10,000 ("applepenapple") and a dictionary of 100,000 words, decide whether the string can be split entirely into dictionary words, and return one valid split.
+
+<details><summary>Hint</summary>
+
+Let ok[i] mean the first i characters can be split. From each reachable position, which dictionary words start there?
+
+</details>
+
+<details><summary>Answer</summary>
+
+Dynamic programming over positions, with a trie to enumerate words. From each position i where ok[i] is true, walk the trie along the string; every end-of-word node reached at position j sets ok[j] = true and records i as its predecessor. The trie stops as soon as no word continues, so it's O(n × L) for longest word length L, instead of testing every substring against a hash set. Follow the predecessors back from the end to recover the split.
+
+</details>
+
+### 7.38 Trie: replace words with their shortest root
+
+**Problem:** You have a dictionary of 50,000 roots ("cat", "bat", "rat") and a sentence of 1 million words. Replace each word with the shortest root that is a prefix of it, leaving words with no matching root unchanged ("the cattle was rattled" becomes "the cat was rat").
+
+<details><summary>Hint</summary>
+
+Checking every root against every word is slow. Walk each word down a trie of roots and stop as early as possible.
+
+</details>
+
+<details><summary>Answer</summary>
+
+Build a trie of the roots. For each word, walk its characters down the trie and stop at the first node with the end flag: that's the shortest root. If the walk falls off the trie first, keep the word. Each word costs at most its own length, so it's O(total characters).
+
+</details>
+
+### 7.39 Trie: scan text for thousands of phrases at once
+
+**Problem:** A moderation service scans each 1 MB chat log for any of 10,000 banned phrases and must report every occurrence. Running a separate substring search per phrase means 10,000 passes over the text. Find all matches in one pass.
+
+<details><summary>Hint</summary>
+
+Put all the phrases in one trie. When a match attempt fails partway through, where in the trie should you continue, rather than restarting from the next character?
+
+</details>
+
+<details><summary>Answer</summary>
+
+The Aho–Corasick automaton: a trie of all the phrases plus failure links, where each node points to the longest proper suffix of its string that is also a prefix in the trie, and output links that report phrases ending there. Scanning moves one character at a time, following failure links on mismatches, so it runs in O(text length + phrase lengths + number of matches). `grep -F` with many patterns and many intrusion-detection systems use this idea.
+
+</details>
+
+### 7.40 Trie: substring queries on a fixed text
+
+**Problem:** You index one large, fixed text, such as a 100 MB genome or a codebase, and then answer millions of queries of the form "does pattern P occur, and where?", each in time depending on P's length, not the text's.
+
+<details><summary>Hint</summary>
+
+Every substring is a prefix of some suffix. So build a structure over all the suffixes.
+
+</details>
+
+<details><summary>Answer</summary>
+
+A trie of all suffixes (a suffix trie) answers each query by walking P, in O(|P|), but has O(n²) nodes. A suffix tree compresses it to O(n) nodes and can be built in O(n) time (Ukkonen's algorithm). In practice a suffix array, the text's suffix start positions sorted lexicographically, is more compact: binary-search for P in O(|P| log n), and all occurrences form one contiguous range. Full-text indexes like the FM-index used by genome aligners build on suffix arrays.
 
 </details>
 
